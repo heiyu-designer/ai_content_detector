@@ -3,14 +3,14 @@ version: "3.8"
 # ============================================
 # 容器隔离说明
 # ============================================
-# 所有容器、卷、网络都使用 ${PROJECT_NAME} 作为前缀
-# 不同项目部署时修改 .env 中的 PROJECT_NAME 即可实现完全隔离
+# 所有容器、端口都使用 ${PROJECT_NAME} 作为前缀
+# 不同项目部署时修改 .env 中的 PROJECT_NAME 即可实现隔离
 #
 # 例如：
-#   项目 A: PROJECT_NAME=project_a  →  project_a_mysql, project_a_redis, project_a_network
-#   项目 B: PROJECT_NAME=project_b  →  project_b_mysql, project_b_redis, project_b_network
+#   项目 A: PROJECT_NAME=unbot  →  unbot_mysql, unbot_redis, 端口 3307, 6379
+#   项目 B: PROJECT_NAME=myapp   →  myapp_mysql, myapp_redis, 端口 3308, 6380
 #
-# 两个项目的 MySQL、Redis、Nginx 完全隔离，互不影响
+# 注意：volumes 和 networks 使用固定名称，不同项目可通过不同端口隔离
 # ============================================
 
 services:
@@ -112,11 +112,17 @@ services:
       - production
 
 networks:
-  ${PROJECT_NAME:-unbot}_network:
+  unbot_network:
+    driver: bridge
+  myapp_network:
     driver: bridge
 
 volumes:
-  ${PROJECT_NAME:-unbot}_mysql_data:
+  unbot_mysql_data:
     driver: local
-  ${PROJECT_NAME:-unbot}_redis_data:
+  unbot_redis_data:
+    driver: local
+  myapp_mysql_data:
+    driver: local
+  myapp_redis_data:
     driver: local

@@ -47,7 +47,8 @@ Keep the core meaning and key points exactly the same.
 Only adjust vocabulary and sentence structure slightly.
 Do not add new ideas or remove existing ones.
 Write in a natural, conversational tone.
-IMPORTANT: Keep the text in its original language. Detect the language of the input text and output in the same language."""
+【CRITICAL】You MUST output in the SAME language as the input text. If input is Chinese, output Chinese. If input is English, output English.
+Never translate - only rewrite."""
 
     def get_user_prompt(self, text: str, lang: str) -> str:
         return f"Rewrite the following text to sound more natural (keep the SAME language as the input):\n\n{text}"
@@ -61,8 +62,8 @@ class MediumRewriteStrategy(RewriteStrategy):
 
 Rules:
 - Keep the core meaning and key points
-- IMPORTANT: Always write the output in the SAME language as the input text
-- Detect the language automatically and preserve it
+- 【CRITICAL】Output MUST be in the SAME language as the input text. Chinese input → Chinese output. English input → English output.
+- Never translate the content
 - Add natural variations in sentence length
 - Include occasional contractions and colloquialisms
 - Vary the sentence structure
@@ -81,8 +82,8 @@ class DeepRewriteStrategy(RewriteStrategy):
 
 Rules:
 - Completely rewrite, but keep the main point
-- IMPORTANT: Always write the output in the SAME language as the input text
-- Detect the language automatically and preserve it
+- 【CRITICAL】Output MUST be in the SAME language as the input text. Chinese input → Chinese output. English input → English output.
+- Never translate the content
 - Use a completely different structure and flow
 - Write as if you are a different person with a different voice
 - Add personal anecdotes or examples where appropriate
@@ -382,25 +383,38 @@ JSON："""
         """
         # 自动检测语言
         output_lang = self._detect_language(text, lang)
-        output_lang_text = "Chinese" if output_lang == "zh" else "English"
+
+        # 根据输出语言选择系统提示词（使用对应语言）
+        if output_lang == "zh":
+            system_prompt = """你是一个专业的文本改写专家。将以下文本改写得更自然、像真人写作。
+
+要求：
+- 保持核心含义和关键要点不变
+- 只调整词汇和句子结构
+- 不添加新观点，不删除原有内容
+- 使用自然、口语化的表达
+- 【关键】必须使用中文输出，不要翻译原文"""
+            user_prompt = f"请将以下中文文本改写得更自然：\n\n{text}"
+        else:
+            system_prompt = """You are a professional text editor. Rewrite the given text to sound more natural and human-written.
+Keep the core meaning and key points exactly the same.
+Only adjust vocabulary and sentence structure slightly.
+Do not add new ideas or remove existing ones.
+Write in a natural, conversational tone.
+IMPORTANT: Respond in English only."""
+
+            user_prompt = f"Rewrite the following text to sound more natural:\n\n{text}"
 
         async def _call_api():
             client = await self._get_client()
-            strategy = RewriteStrategyFactory.get_strategy(strength)
 
             response = await client.post(
                 f"{self.api_base}/v1/text/chatcompletion_v2",
                 json={
                     "model": self.model,
                     "messages": [
-                        {"role": "system", "content": strategy.get_system_prompt()},
-                        {
-                            "role": "user",
-                            "content": (
-                                strategy.get_user_prompt(text, lang)
-                                + f"\n\nIMPORTANT: Write your response in {output_lang_text} language."
-                            ),
-                        },
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
                     ],
                     "temperature": 0.8,
                     "stream": False,
