@@ -1,10 +1,23 @@
 version: "3.8"
 
+# ============================================
+# 容器隔离说明
+# ============================================
+# 所有容器、卷、网络都使用 ${PROJECT_NAME} 作为前缀
+# 不同项目部署时修改 .env 中的 PROJECT_NAME 即可实现完全隔离
+#
+# 例如：
+#   项目 A: PROJECT_NAME=project_a  →  project_a_mysql, project_a_redis, project_a_network
+#   项目 B: PROJECT_NAME=project_b  →  project_b_mysql, project_b_redis, project_b_network
+#
+# 两个项目的 MySQL、Redis、Nginx 完全隔离，互不影响
+# ============================================
+
 services:
   # MySQL 数据库
   mysql:
     image: mysql:8.0
-    container_name: unbot_mysql
+    container_name: ${PROJECT_NAME:-unbot}_mysql
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-unbot_secure_password}
@@ -12,12 +25,12 @@ services:
       MYSQL_USER: ${MYSQL_USER:-unbot}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-unbot_password}
     ports:
-      - "3307:3306"
+      - "${MYSQL_PORT:-3307}:3306"
     volumes:
-      - mysql_data:/var/lib/mysql
+      - ${PROJECT_NAME:-unbot}_mysql_data:/var/lib/mysql
       - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
-      - unbot_network
+      - ${PROJECT_NAME:-unbot}_network
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 10s
@@ -27,14 +40,14 @@ services:
   # Redis 缓存
   redis:
     image: redis:7-alpine
-    container_name: unbot_redis
+    container_name: ${PROJECT_NAME:-unbot}_redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
-      - redis_data:/data
+      - ${PROJECT_NAME:-unbot}_redis_data:/data
     networks:
-      - unbot_network
+      - ${PROJECT_NAME:-unbot}_network
     command: redis-server --appendonly yes
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -47,10 +60,10 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: unbot_backend
+    container_name: ${PROJECT_NAME:-unbot}_backend
     restart: unless-stopped
     ports:
-      - "30001:30001"
+      - "${BACKEND_PORT:-30001}:30001"
     environment:
       - DB_HOST=mysql
       - DB_PORT=3306
@@ -71,7 +84,7 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - unbot_network
+      - ${PROJECT_NAME:-unbot}_network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:30001/health"]
       interval: 30s
@@ -81,11 +94,11 @@ services:
   # Nginx 反向代理（可选，用于前端静态文件和 API 代理）
   nginx:
     image: nginx:alpine
-    container_name: unbot_nginx
+    container_name: ${PROJECT_NAME:-unbot}_nginx
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
+      - "${NGINX_HTTP_PORT:-80}:80"
+      - "${NGINX_HTTPS_PORT:-443}:443"
     volumes:
       - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf
       - ./docker/nginx/conf.d:/etc/nginx/conf.d
@@ -94,17 +107,16 @@ services:
     depends_on:
       - backend
     networks:
-      - unbot_network
-    # 仅在需要时启用（SSL 证书准备好后）
+      - ${PROJECT_NAME:-unbot}_network
     profiles:
       - production
 
 networks:
-  unbot_network:
+  ${PROJECT_NAME:-unbot}_network:
     driver: bridge
 
 volumes:
-  mysql_data:
+  ${PROJECT_NAME:-unbot}_mysql_data:
     driver: local
-  redis_data:
+  ${PROJECT_NAME:-unbot}_redis_data:
     driver: local

@@ -15,6 +15,7 @@
 - [七、验证部署](#七验证部署)
 - [八、日常维护](#八日常维护)
 - [九、故障排查](#九故障排查)
+- [十、多项目隔离部署](#十多项目隔离部署)
 
 ---
 
@@ -218,6 +219,23 @@ nano .env
 填写以下必要配置：
 
 ```env
+# =============================================
+# 项目隔离配置（重要！）
+# =============================================
+# 用于隔离不同项目的 Docker 资源
+# 同一台服务器部署多个项目时，每个项目使用不同的 PROJECT_NAME
+PROJECT_NAME=unbot
+
+# =============================================
+# 端口映射配置
+# =============================================
+# 同一台服务器部署多个项目时，修改这些端口避免冲突
+MYSQL_PORT=3307
+REDIS_PORT=6379
+BACKEND_PORT=30001
+NGINX_HTTP_PORT=80
+NGINX_HTTPS_PORT=443
+
 # =============================================
 # 应用配置
 # =============================================
@@ -681,6 +699,168 @@ docker compose up -d --build
 
 ---
 
+## 十、多项目隔离部署
+
+### 10.1 隔离原理
+
+本项目使用 **项目名称前缀** 实现 Docker 资源隔离。修改 `PROJECT_NAME` 后，所有容器、卷、网络都会以前缀命名，确保不同项目之间完全独立。
+
+**隔离前后对比：**
+
+```bash
+# 隔离前（使用默认名称）
+unbot_mysql          ← 可能与其他项目的 MySQL 冲突
+unbot_redis
+unbot_network
+unbot_mysql_data     ← 可能与其他项目的卷冲突
+
+# 隔离后（PROJECT_NAME=myapp）
+myapp_mysql          ← 独立容器
+myapp_redis
+myapp_network        ← 独立网络
+myapp_mysql_data     ← 独立卷
+```
+
+### 10.2 部署多个项目示例
+
+假设你在同一台服务器上部署两个项目：
+
+#### 项目 A：Unbot AI（检测工具）
+
+```bash
+# 1. 创建项目目录
+mkdir -p /www/unbot-ai
+cd /www/unbot-ai
+
+# 2. 配置环境变量
+cat > .env << EOF
+PROJECT_NAME=unbot
+MYSQL_PORT=3307
+REDIS_PORT=6379
+BACKEND_PORT=30001
+NGINX_HTTP_PORT=80
+NGINX_HTTPS_PORT=443
+MINIMAX_API_KEY=your_api_key
+JWT_SECRET_KEY=your_secret_key
+MYSQL_ROOT_PASSWORD=unbot_root_pass
+MYSQL_PASSWORD=unbot_db_pass
+EOF
+
+# 3. 启动服务
+docker compose up -d
+```
+
+#### 项目 B：另一个应用（使用 MySQL + Tomcat）
+
+```bash
+# 1. 创建项目目录
+mkdir -p /www/myapp
+cd /www/myapp
+
+# 2. 配置环境变量（使用不同的 PROJECT_NAME 和端口）
+cat > .env << EOF
+PROJECT_NAME=myapp
+MYSQL_PORT=3308      # 与项目 A 不同的端口
+REDIS_PORT=6380       # 与项目 A 不同的端口
+BACKEND_PORT=30002
+NGINX_HTTP_PORT=8080  # 与项目 A 不同的端口
+NGINX_HTTPS_PORT=8443
+# 其他配置...
+EOF
+
+# 3. 启动服务
+docker compose up -d
+```
+
+### 10.3 验证隔离
+
+部署后验证两个项目的资源完全隔离：
+
+```bash
+# 查看所有容器（按项目名称分组）
+docker ps --format "table {{.Names}}\t{{.Status}}"
+
+# 预期输出：
+# NAMES                        STATUS
+# unbot_mysql                  Up 2 minutes
+# unbot_redis                  Up 2 minutes
+# unbot_backend                Up 2 minutes
+# unbot_nginx                  Up 1 minute
+# myapp_mysql                  Up 2 minutes
+# myapp_redis                  Up 2 minutes
+# myapp_tomcat                 Up 2 minutes
+# myapp_nginx                  Up 1 minute
+
+# 查看所有卷（按项目名称分组）
+docker volume ls
+
+# 预期输出：
+# DRIVER    VOLUME NAME
+# local     unbot_mysql_data
+# local     unbot_redis_data
+# local     myapp_mysql_data
+# local     myapp_redis_data
+
+# 查看所有网络（按项目名称分组）
+docker network ls
+
+# 预期输出：
+# NETWORK ID     NAME              DRIVER
+# xxx            unbot_network     bridge
+# xxx            myapp_network     bridge
+```
+
+### 10.4 独立管理各项目
+
+每个项目可以独立启动、停止、重启，互不影响：
+
+```bash
+# 管理项目 A
+cd /www/unbot-ai
+docker compose stop      # 停止
+docker compose start     # 启动
+docker compose restart   # 重启
+docker compose logs -f  # 查看日志
+
+# 管理项目 B
+cd /www/myapp
+docker compose stop      # 停止
+docker compose start     # 启动
+docker compose restart   # 重启
+docker compose logs -f  # 查看日志
+```
+
+### 10.5 独立删除各项目
+
+删除某个项目时，不会影响其他项目的数据：
+
+```bash
+# 删除项目 B（不影响项目 A）
+cd /www/myapp
+docker compose down              # 停止并删除容器
+docker volume rm myapp_mysql_data myapp_redis_data  # 删除卷（可选，保留则数据持久化）
+docker network rm myapp_network    # 删除网络
+
+# 项目 A 完全不受影响
+```
+
+### 10.6 多项目部署检查清单
+
+部署多项目时，确保每个项目的以下配置不同：
+
+| 配置项 | 项目 A | 项目 B |
+|--------|--------|--------|
+| `PROJECT_NAME` | `unbot` | `myapp` |
+| `MYSQL_PORT` | `3307` | `3308` |
+| `REDIS_PORT` | `6379` | `6380` |
+| `BACKEND_PORT` | `30001` | `30002` |
+| `NGINX_HTTP_PORT` | `80` | `8080` |
+| `NGINX_HTTPS_PORT` | `443` | `8443` |
+| `MYSQL_DATABASE` | `unbot_ai` | `myapp_db` |
+| 项目目录 | `/www/unbot-ai` | `/www/myapp` |
+
+---
+
 ## 附录：常用命令速查
 
 ```bash
@@ -717,39 +897,41 @@ docker volume ls
 
 ---
 
-## 附录：服务架构说明
+## 附录：服务架构说明（项目隔离视角）
 
 ```
-                    ┌─────────────┐
-                    │   用户浏览器  │
-                    └──────┬──────┘
-                           │
-                           │ HTTPS (443)
-                           ▼
-┌──────────────────────────────────────────────────────┐
-│                    Nginx (反向代理)                    │
-│  ┌─────────────────┐    ┌─────────────────────────┐  │
-│  │   前端静态文件   │    │     API 代理 (/api/)    │  │
-│  │   /usr/share/   │    │   proxy_pass backend   │  │
-│  │   nginx/html    │    │                         │  │
-│  └─────────────────┘    └───────────┬─────────────┘  │
-└───────────────────────────────────────┼───────────────┘
-                                        │ HTTP (30001)
-                                        ▼
-                              ┌─────────────────────┐
-                              │  FastAPI Backend    │
-                              │    (Python 3.11)    │
-                              │    /app/main.py     │
-                              └─────────┬───────────┘
-                                        │
-                    ┌───────────────────┼───────────────────┐
-                    │                   │                   │
-                    ▼                   ▼                   ▼
-            ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
-            │    MySQL     │    │    Redis     │    │   MiniMax    │
-            │   (8.0)      │    │    (7)       │    │    API       │
-            │   :3306      │    │    :6379     │    │  (外部服务)   │
-            └──────────────┘    └──────────────┘    └──────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                        服务器（同一台物理机）                          │
+│                                                                     │
+│  ┌───────────────────────────┐   ┌───────────────────────────┐     │
+│  │       项目 A (unbot)       │   │       项目 B (myapp)       │     │
+│  │                           │   │                           │     │
+│  │  ┌─────────────────────┐  │   │  ┌─────────────────────┐  │     │
+│  │  │  unbot_nginx:80    │  │   │  │  myapp_nginx:8080   │  │     │
+│  │  └──────────┬──────────┘  │   │  └──────────┬──────────┘  │     │
+│  │             │              │   │             │              │     │
+│  │  ┌──────────▼──────────┐  │   │  ┌──────────▼──────────┐  │     │
+│  │  │  unbot_backend      │  │   │  │  myapp_tomcat       │  │     │
+│  │  │  :30001             │  │   │  │  :8080              │  │     │
+│  │  └──────────┬──────────┘  │   │  └──────────┬──────────┘  │     │
+│  │             │              │   │             │              │     │
+│  │  ┌──────────▼──────────┐  │   │  ┌──────────▼──────────┐  │     │
+│  │  │  unbot_mysql :3306  │  │   │  │  myapp_mysql :3306  │  │     │
+│  │  │  unbot_redis :6379 │  │   │  │  myapp_redis :6379  │  │     │
+│  │  └─────────────────────┘  │   │  └─────────────────────┘  │     │
+│  │                           │   │                           │     │
+│  │  unbot_network (bridge)  │   │  myapp_network (bridge)   │     │
+│  │  unbot_mysql_data (vol)  │   │  myapp_mysql_data (vol)   │     │
+│  │  unbot_redis_data (vol)  │   │  myapp_redis_data (vol)  │     │
+│  └───────────────────────────┘   └───────────────────────────┘     │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+
+关键隔离点：
+1. 容器名称：unbot_* vs myapp_* （完全独立）
+2. 网络：unbot_network vs myapp_network （流量隔离）
+3. 卷：unbot_*_data vs myapp_*_data （数据隔离）
+4. 端口映射：3307 vs 3308, 80 vs 8080 （主机端口隔离）
 ```
 
 ---
@@ -758,6 +940,12 @@ docker volume ls
 
 | 变量名 | 必填 | 默认值 | 说明 |
 |--------|------|--------|------|
+| `PROJECT_NAME` | 是 | unbot | **项目隔离前缀**，所有资源以此命名 |
+| `MYSQL_PORT` | 否 | 3307 | MySQL 映射端口（多项目时必填） |
+| `REDIS_PORT` | 否 | 6379 | Redis 映射端口（多项目时必填） |
+| `BACKEND_PORT` | 否 | 30001 | 后端映射端口（多项目时必填） |
+| `NGINX_HTTP_PORT` | 否 | 80 | Nginx HTTP 端口（多项目时必填） |
+| `NGINX_HTTPS_PORT` | 否 | 443 | Nginx HTTPS 端口（多项目时必填） |
 | `MYSQL_ROOT_PASSWORD` | 是 | - | MySQL Root 密码 |
 | `MYSQL_DATABASE` | 是 | unbot_ai | 数据库名 |
 | `MYSQL_USER` | 是 | unbot | 数据库用户 |
@@ -770,6 +958,7 @@ docker volume ls
 
 ---
 
-*文档版本：1.0*
+*文档版本：1.1*
 *最后更新：2026-03-25*
 *适用版本：Unbot AI v1.0.0+*
+*更新内容：增加多项目隔离部署章节*
