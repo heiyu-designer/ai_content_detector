@@ -1,13 +1,13 @@
 """
 Humanize 改写接口路由
 
-提供 AI 文本改写为人类风格的功能
+提供 AI 文本改写为人类风格的功能（需要登录）
 """
 import logging
-from typing import Optional
 
-from fastapi import APIRouter, Cookie
+from fastapi import APIRouter, Depends
 
+from app.core.dependencies import AuthUser, get_current_user
 from app.core.exceptions import AIServiceException, QuotaExceededException
 from app.core.redis_client import redis_client
 from app.schemas.humanize import HumanizeRequest, HumanizeResponse
@@ -25,11 +25,10 @@ quota_service = QuotaService(redis_client)
 @router.post("/humanize", response_model=HumanizeResponse)
 async def humanize_text(
     request: HumanizeRequest,
-    session_id: Optional[str] = Cookie(None),
-    user_id: Optional[str] = None,
+    current_user: AuthUser = Depends(get_current_user),
 ):
     """
-    Humanize 改写接口
+    Humanize 改写接口（需要登录）
 
     将 AI 生成的文本改写成更像人类写作的风格
 
@@ -39,21 +38,19 @@ async def humanize_text(
 
     返回改写后的文本
     """
-    identifier = user_id or session_id or "anonymous"
-
     logger.info(
         "收到 Humanize 请求",
         extra={
-            "identifier": identifier,
+            "user_id": current_user.user_id,
             "text_length": len(request.text),
             "strength": request.strength,
             "lang": request.lang,
         },
     )
 
-    # 检查配额
+    # 检查配额（使用 user_id 计数）
     available, remaining = await quota_service.check_and_increment(
-        identifier, "humanize", is_premium=False
+        current_user.user_id, "humanize", is_premium=current_user.is_premium
     )
 
     if not available:
@@ -69,7 +66,7 @@ async def humanize_text(
         logger.info(
             "Humanize 改写完成",
             extra={
-                "identifier": identifier,
+                "user_id": current_user.user_id,
                 "strength": request.strength,
                 "original_length": len(result.original),
                 "rewritten_length": len(result.rewritten),
@@ -88,6 +85,6 @@ async def humanize_text(
     except Exception as e:
         logger.error(
             f"Humanize 改写失败: {str(e)}",
-            extra={"identifier": identifier},
+            extra={"user_id": current_user.user_id},
         )
         raise AIServiceException()

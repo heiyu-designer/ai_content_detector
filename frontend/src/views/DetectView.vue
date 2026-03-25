@@ -2,11 +2,12 @@
 /**
  * AI 检测视图
 
-提供文本 AI 检测功能
+提供文本 AI 检测功能（需要登录）
 */
 import { ref, onMounted, watch } from "vue"
 import { useRouter } from "vue-router"
 import { useQuotaStore } from "@/stores/quota"
+import { useAuthStore } from "@/stores/auth"
 import { useTextStore } from "@/stores/text"
 import { detectText } from "@/services/api"
 import ProgressBar from "@/components/ProgressBar.vue"
@@ -16,6 +17,7 @@ import type { DetectResponse, SentenceAnalysis } from "@/types"
 
 const router = useRouter()
 const quotaStore = useQuotaStore()
+const authStore = useAuthStore()
 const textStore = useTextStore()
 
 // 状态
@@ -41,8 +43,14 @@ watch(text, (newText) => {
   }
 })
 
-// 初始化文本
+// 初始化
 onMounted(() => {
+  // 未登录，跳转到登录页
+  if (!authStore.isAuthenticated) {
+    router.push({ name: "login" })
+    return
+  }
+
   // 从 store 获取待检测文本
   const storeText = textStore.getAndClearText()
   if (storeText) {
@@ -52,6 +60,12 @@ onMounted(() => {
   // 获取配额
   quotaStore.fetchQuota()
 })
+
+// 退出登录
+function handleLogout() {
+  authStore.logout()
+  router.push({ name: "home" })
+}
 
 // 提交检测
 async function handleDetect() {
@@ -119,8 +133,12 @@ function handleReset() {
             <span class="text-xl font-bold text-gray-900">Unbot AI</span>
           </router-link>
 
-          <!-- 配额显示 -->
+          <!-- 用户信息和配额 -->
           <div class="flex items-center space-x-4">
+            <span class="text-gray-600 text-sm">{{ authStore.userEmail }}</span>
+            <span v-if="authStore.isPremium" class="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded-full">
+              Premium
+            </span>
             <span class="text-sm text-gray-600">
               Daily Quota: {{ quotaStore.remaining }}/{{ quotaStore.dailyLimit }}
             </span>
@@ -129,6 +147,12 @@ function handleReset() {
               class="text-sm text-primary-600 hover:text-primary-700 font-medium"
             >
               Upgrade
+            </button>
+            <button
+              @click="handleLogout"
+              class="text-sm text-gray-600 hover:text-red-600"
+            >
+              Logout
             </button>
           </div>
         </div>

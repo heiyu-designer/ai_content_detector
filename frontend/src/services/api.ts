@@ -4,6 +4,7 @@
 封装所有 API 调用
 */
 import axios, { AxiosError } from "axios"
+import router from "@/router"
 import type {
   DetectRequest,
   DetectResponse,
@@ -49,6 +50,17 @@ apiClient.interceptors.response.use(
     return response
   },
   (error: AxiosError<ErrorResponse | { detail: unknown }>) => {
+    // 401 未授权：跳转到登录页
+    if (error.response?.status === 401) {
+      // 清除本地登录状态
+      localStorage.removeItem("access_token")
+      localStorage.removeItem("user_email")
+
+      // 跳转到登录页
+      router.push({ name: "login" })
+      return Promise.reject(new Error("请先登录后再使用"))
+    }
+
     const data = error.response?.data as Record<string, unknown> | undefined
 
     // 业务错误

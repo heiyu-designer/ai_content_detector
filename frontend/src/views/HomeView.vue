@@ -18,16 +18,28 @@ const authStore = useAuthStore()
 // 定价弹窗状态
 const showPricingModal = ref(false)
 
-// 跳转到检测页面
+// 跳转到检测页面（需要登录）
 function goToDetect() {
+  // 未登录，跳转到登录页
+  if (!authStore.isAuthenticated) {
+    router.push({ name: "login" })
+    return
+  }
+
   if (textareaValue.value.trim()) {
     textStore.setText(textareaValue.value)
   }
   router.push({ name: "detect" })
 }
 
-// 跳转到 Humanize 页面
+// 跳转到 Humanize 页面（需要登录）
 function goToHumanize() {
+  // 未登录，跳转到登录页
+  if (!authStore.isAuthenticated) {
+    router.push({ name: "login" })
+    return
+  }
+
   if (textareaValue.value.trim()) {
     textStore.setText(textareaValue.value)
   }
