@@ -1,27 +1,339 @@
 # Unbot AI 服务器部署指南
 
-本文档提供在全新 Linux 服务器上部署 Unbot AI 的完整步骤。服务器无需预装 Python 环境，所有服务将通过 Docker 容器运行。
+本文档提供在全新 Linux 服务器上部署 Unbot AI 的完整步骤。支持两种部署模式：
+
+| 部署模式 | 适用场景 | 优点 |
+|----------|----------|------|
+| **开发模式** | 本地开发、调试 | 代码修改热重载，调试方便 |
+| **生产模式** | 正式上线 | 完整容器化，一键部署 |
 
 ---
 
 ## 目录
 
-- [一、服务器准备](#一服务器准备)
-- [二、安装 Docker](#二安装-docker)
-- [三、安装 Docker Compose](#三安装-docker-compose)
-- [四、服务器环境配置](#四服务器环境配置)
-- [五、部署项目](#五部署项目)
-- [六、配置域名和 SSL](#六配置域名和-ssl)
-- [七、验证部署](#七验证部署)
-- [八、日常维护](#八日常维护)
-- [九、故障排查](#九故障排查)
-- [十、多项目隔离部署](#十多项目隔离部署)
+- [一、部署模式选择](#一部署模式选择)
+- [二、开发模式部署](#二开发模式部署)
+  - [2.1 环境检查](#21-环境检查)
+  - [2.2 安装 Docker（仅数据库）](#22-安装-docker仅数据库)
+  - [2.3 配置环境变量](#23-配置环境变量)
+  - [2.4 启动数据库服务](#24-启动数据库服务)
+  - [2.5 安装后端依赖](#25-安装后端依赖)
+  - [2.6 启动后端服务](#26-启动后端服务)
+  - [2.7 安装前端依赖](#27-安装前端依赖)
+  - [2.8 启动前端服务](#28-启动前端服务)
+- [三、生产模式部署](#三生产模式部署)
+  - [3.1 服务器准备](#31-服务器准备)
+  - [3.2 安装 Docker](#32-安装-docker)
+  - [3.3 安装 Docker Compose](#33-安装-docker-compose)
+  - [3.4 服务器环境配置](#34-服务器环境配置)
+  - [3.5 部署项目](#35-部署项目)
+  - [3.6 配置域名和 SSL](#36-配置域名和-ssl)
+  - [3.7 验证部署](#37-验证部署)
+  - [3.8 日常维护](#38-日常维护)
+  - [3.9 故障排查](#39-故障排查)
+- [四、多项目隔离部署](#四多项目隔离部署)
+- [附录：常用命令速查](#附录常用命令速查)
 
 ---
 
-## 一、服务器准备
+## 一、部署模式选择
 
-### 1.1 服务器要求
+### 架构对比
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         开发模式（推荐开发使用）                           │
+│                                                                         │
+│   ┌─────────────────┐         ┌─────────────────┐                      │
+│   │  Docker 网络     │         │  宿主机开发环境   │                      │
+│   │  ┌───────────┐  │         │                 │                      │
+│   │  │  MySQL    │◄─┼─────────┼─► localhost:3307 │                      │
+│   │  │  (容器)    │  │         │                 │                      │
+│   │  └───────────┘  │         │  ┌─────────────┐│                      │
+│   │  ┌───────────┐  │         │  │  后端        ││                      │
+│   │  │  Redis    │◄─┼─────────┼─► uvicorn     ││                      │
+│   │  │  (容器)    │  │         │  │  :30001      ││                      │
+│   │  └───────────┘  │         │  └──────┬──────┘│                      │
+│   └─────────────────┘         │         │        │                      │
+│                                │         ▼        │                      │
+│                                │  ┌─────────────┐│                      │
+│                                │  │  前端        ││                      │
+│                                │  │  Vite :5173 ││                      │
+│                                │  └─────────────┘│                      │
+│                                └─────────────────┘                      │
+│   ✅ 代码修改热重载  ✅ 直接调试 print  ✅ 前端 HMR                       │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         生产模式（推荐正式部署）                           │
+│                                                                         │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │                      Docker 网络                                │   │
+│   │   ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐         │   │
+│   │   │  MySQL  │  │  Redis  │  │  后端   │  │  Nginx  │         │   │
+│   │   │(容器)   │  │(容器)   │  │(容器)   │  │(容器)   │         │   │
+│   │   └─────────┘  └─────────┘  └────┬────┘  └────┬────┘         │   │
+│   │                                  │            │               │   │
+│   └──────────────────────────────────┼────────────┼───────────────┘   │
+│                                      │            │                   │
+│                                      ▼            ▼                   │
+│                               ┌───────────────────────────┐           │
+│                               │    外部访问 (HTTPS)        │           │
+│                               │    域名 → Nginx → 后端    │           │
+│                               └───────────────────────────┘           │
+│   ✅ 一键部署  ✅ 容器隔离  ✅ 系统资源占用低                    │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 选择指南
+
+| 场景 | 推荐模式 |
+|------|----------|
+| 本地开发、调试、修改代码 | **开发模式** |
+| 二次开发、功能添加、Bug 修复 | **开发模式** |
+| 正式生产环境部署 | **生产模式** |
+| 演示环境、快速验证 | **开发模式** |
+
+---
+
+## 二、开发模式部署
+
+开发模式利用 Docker 管理数据库服务（MySQL、Redis），而应用代码（后端、前端）直接运行在宿主机上，兼顾开发便利性和部署隔离性。
+
+### 2.1 环境检查
+
+首先检查当前环境：
+
+```bash
+# 检查 Python 版本（需要 3.10+）
+python3 --version
+# 预期：Python 3.10.12 或更高
+
+# 检查 Node.js 和 npm 版本
+node --version && npm --version
+# 预期：v18+ 和 9+
+
+# 检查 Docker 是否安装
+docker --version
+# 如果提示找不到 docker，继续下一步安装
+```
+
+### 2.2 安装 Docker（仅数据库）
+
+开发模式只需要 Docker 来运行 MySQL 和 Redis，不需要完整的 Docker 部署流程。
+
+#### Ubuntu / Debian 系统
+
+```bash
+# 1. 更新软件包索引
+sudo apt-get update
+
+# 2. 安装必要的基础软件
+sudo apt-get install -y ca-certificates curl gnupg lsb-release
+
+# 3. 添加 Docker 官方 GPG 密钥
+sudo mkdir -p /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+
+# 4. 设置 Docker 仓库
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# 5. 安装 Docker
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+# 6. 验证安装
+docker --version
+```
+
+#### 启动 Docker 服务
+
+```bash
+# 启动 Docker
+sudo systemctl start docker
+
+# 设置开机自启
+sudo systemctl enable docker
+
+# 将当前用户加入 docker 组（免 sudo）
+sudo usermod -aG docker $USER
+
+# 重新登录后生效，或执行
+newgrp docker
+
+# 验证（不需要 sudo）
+docker ps
+```
+
+### 2.3 配置环境变量
+
+```bash
+# 进入项目目录
+cd /ziye/project/ai_content_detector
+
+# 复制环境变量模板
+cp .env.example .env
+
+# 编辑环境变量
+nano .env
+```
+
+关键配置项说明：
+
+```env
+# =============================================
+# 项目隔离配置
+# =============================================
+PROJECT_NAME=unbot
+
+# =============================================
+# 端口映射配置
+# =============================================
+MYSQL_PORT=3307          # Docker 映射到主机的端口
+REDIS_PORT=6379          # Docker 映射到主机的端口
+BACKEND_PORT=30001       # 后端端口（本地运行，不映射）
+
+# =============================================
+# 数据库配置 (MySQL)
+# =============================================
+DB_HOST=localhost        # 本地开发连接 Docker MySQL
+DB_PORT=3307             # 使用映射后的端口
+MYSQL_DATABASE=unbot_ai
+MYSQL_USER=unbot
+MYSQL_PASSWORD=your_password
+
+# Docker 内部配置（不变）
+MYSQL_ROOT_PASSWORD=change_this_root_password
+
+# =============================================
+# JWT 配置（必须修改！）
+# =============================================
+JWT_SECRET_KEY=change_this_to_a_random_secret_key_at_least_32_chars
+```
+
+### 2.4 启动数据库服务
+
+仅启动 MySQL 和 Redis，不启动后端和 Nginx：
+
+```bash
+# 启动数据库服务（后台运行）
+docker-compose up -d mysql redis
+
+# 查看服务状态
+docker ps
+
+# 预期输出：
+# CONTAINER ID   IMAGE          COMMAND                  CREATED         STATUS         PORTS                    NAMES
+# xxxxxxxx       mysql:8.0     "docker-entrypoint.s…"   2 minutes ago   Up 2 minutes   0.0.0.0:3307->3306/tcp   unbot_mysql
+# xxxxxxxx       redis:7-alpine "docker-entrypoint.s…"   2 minutes ago   Up 2 minutes   0.0.0.0:6379->6379/tcp   unbot_redis
+
+# 查看日志
+docker-compose logs -f mysql redis
+```
+
+### 2.5 安装后端依赖
+
+```bash
+# 进入后端目录
+cd /ziye/project/ai_content_detector/backend
+
+# 创建虚拟环境（推荐）
+python3 -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+
+# 安装依赖
+pip install -r requirements.txt
+
+# 验证安装
+python -c "import fastapi; print(f'FastAPI {fastapi.__version__}')"
+```
+
+### 2.6 启动后端服务
+
+```bash
+# 确保在 backend 目录，虚拟环境已激活
+cd /ziye/project/ai_content_detector/backend
+source venv/bin/activate
+
+# 启动后端（开发模式，热重载）
+# 注意：DB_HOST 使用 localhost，PORT 使用 .env 中的映射端口 3307
+uvicorn app.main:app --reload --port 30001
+
+# 预期输出：
+# INFO:     Uvicorn running on http://0.0.0.0:30001
+# INFO:     Application startup complete.
+```
+
+后端启动后，保持终端运行，新开一个终端继续下一步。
+
+### 2.7 安装前端依赖
+
+```bash
+# 新开终端，进入前端目录
+cd /ziye/project/ai_content_detector/frontend
+
+# 安装依赖
+npm install
+
+# 验证安装
+npm --version
+```
+
+### 2.8 启动前端服务
+
+```bash
+# 确保在 frontend 目录
+cd /ziye/project/ai_content_detector/frontend
+
+# 启动开发服务器（热重载）
+npm run dev
+
+# 预期输出：
+#   VITE v5.x.x  ready in xxx ms
+#   Local: http://localhost:5173/
+#   Network: http://192.168.x.x:5173/
+```
+
+### 访问应用
+
+打开浏览器访问：
+
+| 服务 | 地址 |
+|------|------|
+| 前端 | http://localhost:5173 |
+| 后端 API | http://localhost:30001 |
+| 健康检查 | http://localhost:30001/health |
+| API 文档 | http://localhost:30001/docs |
+
+### 开发模式命令汇总
+
+```bash
+# 启动数据库（首次或重启后）
+docker-compose up -d mysql redis
+
+# 启动后端
+cd backend && source venv/bin/activate && uvicorn app.main:app --reload --port 30001
+
+# 启动前端（新终端）
+cd frontend && npm run dev
+
+# 查看数据库日志
+docker-compose logs -f mysql redis
+
+# 停止数据库
+docker-compose down
+
+# 重置配额（测试用）
+docker exec unbot_redis redis-cli FLUSHDB
+```
+
+---
+
+## 三、生产模式部署
+
+### 3.1 服务器准备
+
+#### 3.1.1 服务器要求
 
 | 项目 | 最低配置 | 推荐配置 |
 |------|----------|----------|
@@ -31,7 +343,7 @@
 | 操作系统 | Ubuntu 20.04+ / CentOS 8+ / Debian 11+ | Ubuntu 22.04 LTS |
 | 网络 | 独立 IP，带宽 5Mbps+ | 带宽 10Mbps+ |
 
-### 1.2 开放端口
+#### 3.1.2 开放端口
 
 | 端口 | 用途 | 备注 |
 |------|------|------|
@@ -41,7 +353,7 @@
 
 **在云服务器控制台的安全组中开放 80 和 443 端口。**
 
-### 1.3 连接服务器
+#### 3.1.3 连接服务器
 
 使用 SSH 连接到服务器：
 
@@ -51,9 +363,9 @@ ssh root@你的服务器IP
 
 ---
 
-## 二、安装 Docker
+### 3.2 安装 Docker
 
-### 2.1 Ubuntu / Debian 系统
+#### 3.2.1 Ubuntu / Debian 系统
 
 ```bash
 # 1. 更新软件包索引
@@ -77,7 +389,7 @@ apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
 docker --version
 ```
 
-### 2.2 CentOS / RHEL 系统
+#### 3.2.2 CentOS / RHEL 系统
 
 ```bash
 # 1. 安装必要软件
@@ -97,7 +409,7 @@ systemctl enable docker
 docker --version
 ```
 
-### 2.3 启动 Docker 服务
+#### 3.2.3 启动 Docker 服务
 
 ```bash
 # 启动 Docker
@@ -112,7 +424,7 @@ systemctl status docker
 
 ---
 
-## 三、安装 Docker Compose
+### 3.3 安装 Docker Compose
 
 Docker Compose V2 已随 Docker 安装（`docker compose` 命令）。验证：
 
@@ -138,9 +450,9 @@ docker-compose --version
 
 ---
 
-## 四、服务器环境配置
+### 3.4 服务器环境配置
 
-### 4.1 创建项目目录
+#### 3.4.1 创建项目目录
 
 ```bash
 # 创建项目目录
@@ -151,13 +463,13 @@ cd /www/unbot-ai
 mkdir -p data/mysql data/redis
 ```
 
-### 4.2 创建 SSL 证书目录
+#### 3.4.2 创建 SSL 证书目录
 
 ```bash
 mkdir -p /www/unbot-ai/docker/nginx/ssl
 ```
 
-### 4.3 安装可选工具
+#### 3.4.3 安装可选工具
 
 ```bash
 # 安装 git（用于代码更新）
@@ -169,9 +481,9 @@ apt-get install -y curl
 
 ---
 
-## 五、部署项目
+### 3.5 部署项目
 
-### 5.1 上传项目代码
+#### 3.5.1 上传项目代码
 
 **方式一：使用 Git 克隆（推荐）**
 
@@ -206,7 +518,7 @@ tar -xzvf unbot-ai.tar.gz --strip-components=1
 rm unbot-ai.tar.gz
 ```
 
-### 5.2 配置环境变量
+#### 3.5.2 配置环境变量
 
 ```bash
 # 复制环境变量模板
@@ -288,7 +600,7 @@ DAILY_FREE_QUOTA=5
 - `MYSQL_ROOT_PASSWORD` 和 `MYSQL_PASSWORD` 必须设置为复杂密码
 - `MINIMAX_API_KEY` 必须填写有效值，否则 AI 功能无法使用
 
-### 5.3 构建前端
+#### 3.5.3 构建前端
 
 前端需要构建后才能部署到 Nginx：
 
@@ -307,7 +619,7 @@ cd /www/unbot-ai
 
 构建完成后，前端文件会生成在 `/www/unbot-ai/frontend/dist` 目录。
 
-### 5.4 修改 Docker Compose 配置
+#### 3.5.4 修改 Docker Compose 配置
 
 编辑 `docker-compose.yml`，确保生产环境配置正确：
 
@@ -334,7 +646,7 @@ backend:
     - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
 ```
 
-### 5.5 启动服务
+#### 3.5.5 启动服务
 
 ```bash
 # 构建并启动所有服务（后台运行）
@@ -356,7 +668,7 @@ unbot_backend       unbot-ai-backend    "uvicorn app.main:ap…"   backend
 unbot_nginx         nginx:alpine         "/docker-entrypoint.…"   nginx
 ```
 
-### 5.6 等待服务启动
+#### 3.5.6 等待服务启动
 
 MySQL 和 Redis 需要时间初始化：
 
@@ -372,9 +684,9 @@ docker compose logs -f backend
 
 ---
 
-## 六、配置域名和 SSL
+### 3.6 配置域名和 SSL
 
-### 6.1 配置域名 DNS
+#### 3.6.1 配置域名 DNS
 
 在域名服务商处添加 DNS 记录：
 
@@ -385,7 +697,7 @@ docker compose logs -f backend
 
 等待 DNS 生效（通常 5 分钟到 24 小时）。
 
-### 6.2 申请 SSL 证书（Let's Encrypt 免费）
+#### 3.6.2 申请 SSL 证书（Let's Encrypt 免费）
 
 ```bash
 # 安装 Certbot
@@ -399,7 +711,7 @@ certbot --nginx -d your-domain.com -d www.your-domain.com
 
 证书自动续期已配置，无需手动操作。
 
-### 6.3 配置 Nginx SSL
+#### 3.6.3 配置 Nginx SSL
 
 证书申请成功后，编辑 Nginx 配置：
 
@@ -483,15 +795,15 @@ docker compose restart nginx
 
 ---
 
-## 七、验证部署
+### 3.7 验证部署
 
-### 7.1 本地测试
+#### 3.7.1 本地测试
 
 在浏览器中访问：
 - HTTP: `http://你的服务器IP`
 - HTTPS: `https://你的域名`
 
-### 7.2 API 健康检查
+#### 3.7.2 API 健康检查
 
 ```bash
 # 检查后端健康状态
@@ -501,7 +813,7 @@ curl http://localhost:30001/health
 {"status":"ok","service":"unbot-ai-backend"}
 ```
 
-### 7.3 测试 AI 检测功能
+#### 3.7.3 测试 AI 检测功能
 
 ```bash
 curl -X POST http://localhost/api/v1/detect \
@@ -522,7 +834,7 @@ curl -X POST http://localhost/api/v1/detect \
 }
 ```
 
-### 7.4 检查容器日志
+#### 3.7.4 检查容器日志
 
 ```bash
 # 查看所有服务日志
@@ -536,9 +848,9 @@ docker compose logs -f nginx
 
 ---
 
-## 八、日常维护
+### 3.8 日常维护
 
-### 8.1 查看服务状态
+#### 3.8.1 查看服务状态
 
 ```bash
 # 查看运行状态
@@ -548,7 +860,7 @@ docker compose ps
 docker stats
 ```
 
-### 8.2 更新代码
+#### 3.8.2 更新代码
 
 ```bash
 cd /www/unbot-ai
@@ -560,7 +872,7 @@ git pull origin main
 docker compose up -d --build
 ```
 
-### 8.3 备份数据
+#### 3.8.3 备份数据
 
 ```bash
 # 备份 MySQL 数据
@@ -571,7 +883,7 @@ docker compose exec redis redis-cli SAVE
 cp -r data/redis dump.rdb backup_redis_$(date +%Y%m%d).rdb
 ```
 
-### 8.4 查看磁盘使用
+#### 3.8.4 查看磁盘使用
 
 ```bash
 # 查看 Docker 磁盘使用
@@ -581,7 +893,7 @@ docker system df
 docker system prune -a
 ```
 
-### 8.5 日志管理
+#### 3.8.5 日志管理
 
 ```bash
 # 查看 Nginx 访问日志
@@ -607,9 +919,9 @@ docker compose exec nginx tail -f /var/log/nginx/error.log
 
 ---
 
-## 九、故障排查
+### 3.9 故障排查
 
-### 9.1 服务无法启动
+#### 3.9.1 服务无法启动
 
 ```bash
 # 查看详细日志
@@ -623,7 +935,7 @@ netstat -tlnp | grep 端口号
 chown -R 1000:1000 data/
 ```
 
-### 9.2 MySQL 连接失败
+#### 3.9.2 MySQL 连接失败
 
 ```bash
 # 查看 MySQL 日志
@@ -639,7 +951,7 @@ rm -rf data/mysql/*
 docker compose up -d mysql
 ```
 
-### 9.3 前端显示 502 Bad Gateway
+#### 3.9.3 前端显示 502 Bad Gateway
 
 ```bash
 # 检查后端是否正常运行
@@ -653,7 +965,7 @@ docker compose logs nginx
 # 2. 后端服务未启动 - 查看 backend 日志
 ```
 
-### 9.4 API 返回 500 错误
+#### 3.9.4 API 返回 500 错误
 
 ```bash
 # 查看后端详细日志
@@ -664,7 +976,7 @@ docker compose logs backend
 # 2. 数据库连接失败
 ```
 
-### 9.5 重启所有服务
+#### 3.9.5 重启所有服务
 
 ```bash
 # 停止所有服务
@@ -680,7 +992,7 @@ docker compose up -d
 docker compose ps
 ```
 
-### 9.6 完全重置（慎用！会丢失所有数据）
+#### 3.9.6 完全重置（慎用！会丢失所有数据）
 
 ```bash
 # 停止服务
@@ -699,9 +1011,9 @@ docker compose up -d --build
 
 ---
 
-## 十、多项目隔离部署
+## 四、多项目隔离部署
 
-### 10.1 隔离原理
+### 4.1 隔离原理
 
 本项目使用 **项目名称前缀** 实现 Docker 资源隔离。修改 `PROJECT_NAME` 后，所有容器、卷、网络都会以前缀命名，确保不同项目之间完全独立。
 
@@ -721,7 +1033,7 @@ myapp_network        ← 独立网络
 myapp_mysql_data     ← 独立卷
 ```
 
-### 10.2 部署多个项目示例
+### 4.2 部署多个项目示例
 
 假设你在同一台服务器上部署两个项目：
 
@@ -772,7 +1084,7 @@ EOF
 docker compose up -d
 ```
 
-### 10.3 验证隔离
+### 4.3 验证隔离
 
 部署后验证两个项目的资源完全隔离：
 
@@ -810,7 +1122,7 @@ docker network ls
 # xxx            myapp_network     bridge
 ```
 
-### 10.4 独立管理各项目
+### 4.4 独立管理各项目
 
 每个项目可以独立启动、停止、重启，互不影响：
 
@@ -830,7 +1142,7 @@ docker compose restart   # 重启
 docker compose logs -f  # 查看日志
 ```
 
-### 10.5 独立删除各项目
+### 4.5 独立删除各项目
 
 删除某个项目时，不会影响其他项目的数据：
 
@@ -844,7 +1156,7 @@ docker network rm myapp_network    # 删除网络
 # 项目 A 完全不受影响
 ```
 
-### 10.6 多项目部署检查清单
+### 4.6 多项目部署检查清单
 
 部署多项目时，确保每个项目的以下配置不同：
 
@@ -958,7 +1270,7 @@ docker volume ls
 
 ---
 
-*文档版本：1.1*
+*文档版本：1.2*
 *最后更新：2026-03-25*
 *适用版本：Unbot AI v1.0.0+*
-*更新内容：增加多项目隔离部署章节*
+*更新内容：增加开发模式部署方案（Docker 数据库 + 本地应用），优化章节结构*
