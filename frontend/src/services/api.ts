@@ -57,7 +57,15 @@ apiClient.interceptors.response.use(
       // 获取详细错误信息
       let errorMessage = "请先登录后再使用"
 
-      if (data?.detail && typeof data.detail === "string") {
+      // 优先检查 error.message（自定义错误格式）
+      if (data?.error && typeof data.error === "object") {
+        const err = data.error as { message?: string }
+        if (err.message) {
+          errorMessage = err.message
+        }
+      }
+      // 其次检查 detail（FastAPI 默认格式）
+      else if (data?.detail && typeof data.detail === "string") {
         errorMessage = data.detail
       }
 
