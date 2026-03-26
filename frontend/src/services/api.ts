@@ -50,18 +50,28 @@ apiClient.interceptors.response.use(
     return response
   },
   (error: AxiosError<ErrorResponse | { detail: unknown }>) => {
+    const data = error.response?.data as Record<string, unknown> | undefined
+
     // 401 未授权：跳转到登录页
     if (error.response?.status === 401) {
-      // 清除本地登录状态
-      localStorage.removeItem("access_token")
-      localStorage.removeItem("user_email")
+      // 获取详细错误信息
+      let errorMessage = "请先登录后再使用"
 
-      // 跳转到登录页
-      router.push({ name: "login" })
-      return Promise.reject(new Error("请先登录后再使用"))
+      if (data?.detail && typeof data.detail === "string") {
+        errorMessage = data.detail
+      }
+
+      // 如果当前在登录页，不需要跳转
+      if (router.currentRoute.value.name !== "login") {
+        // 清除本地登录状态
+        localStorage.removeItem("access_token")
+        localStorage.removeItem("user_email")
+        // 跳转到登录页
+        router.push({ name: "login" })
+      }
+
+      return Promise.reject(new Error(errorMessage))
     }
-
-    const data = error.response?.data as Record<string, unknown> | undefined
 
     // 业务错误
     if (data?.error && typeof data.error === "object") {
